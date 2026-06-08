@@ -109,22 +109,23 @@ function App() {
 
   // ── PDF Upload — dynamic import fixes Vercel/esbuild build error ────────────
   const handleFileUpload = async (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
+  const file = event.target.files[0];
+  if (!file) return;
 
-    if (file.type !== 'application/pdf') {
-      alert("Please upload a valid PDF file.");
-      return;
-    }
+  if (file.type !== 'application/pdf') {
+    alert("Please upload a valid PDF file.");
+    return;
+  }
 
-    setIsLoading(true);
-    setResumeFileName(file.name);
+  setIsLoading(true);
+  setResumeFileName(file.name);
 
-    try {
-      // Dynamic import — esbuild won't try to statically bundle pdfjs at build time
-      const pdfjsLib = await import('pdfjs-dist');
-      // Use the local worker file from /public folder
-      pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
+  try {
+    // Dynamic import
+    const pdfjsLib = await import('pdfjs-dist');
+    
+    // Set worker source - use full URL for Vercel compatibility
+    pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
 
       const arrayBuffer = await file.arrayBuffer();
       const uint8Array = new Uint8Array(arrayBuffer);
