@@ -2,10 +2,14 @@ import { useState, useEffect, useRef } from 'react';
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
 import { auth, db } from './firebase';
 import { collection, addDoc, query, where, getDocs } from 'firebase/firestore';
-import * as pdfjsLib from 'pdfjs-dist/build/pdf';
 import './App.css';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+// ── pdfjs-dist v5 correct import ──────────────────────────────────────────────
+import * as pdfjsLib from 'pdfjs-dist';
+// For pdfjs-dist v5, set the workerSrc to the CDN copy so Vite doesn't bundle it
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
+// ─────────────────────────────────────────────────────────────────────────────
 
 function App() {
   const [user, setUser] = useState(null);
@@ -20,30 +24,26 @@ function App() {
   const [isParsed, setIsParsed] = useState(false);
   const [userTechStack, setUserTechStack] = useState('');
   const [history, setHistory] = useState([]);
+  const [resumeFileName, setResumeFileName] = useState('');
 
-  // Dark/Light mode
   const [isDark, setIsDark] = useState(() => localStorage.getItem('theme') !== 'light');
 
-  // Mock Interview
   const [mockQuestion, setMockQuestion] = useState('');
   const [mockAnswer, setMockAnswer] = useState('');
   const [mockFeedback, setMockFeedback] = useState('');
   const [mockRound, setMockRound] = useState(0);
 
-  // JD Matcher
   const [jobDescription, setJobDescription] = useState('');
   const [jdResult, setJdResult] = useState('');
 
-  // Timer
   const [timerSeconds, setTimerSeconds] = useState(0);
   const [timerRunning, setTimerRunning] = useState(false);
   const timerRef = useRef(null);
 
-  // Voice
   const [isListening, setIsListening] = useState(false);
   const recognitionRef = useRef(null);
 
-  // Auth state listener (fixes refresh logout bug)
+  // Auth state listener
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
       setUser(firebaseUser);
@@ -52,13 +52,11 @@ function App() {
     return () => unsubscribe();
   }, []);
 
-  // Theme effect
   useEffect(() => {
     document.body.setAttribute('data-theme', isDark ? 'dark' : 'light');
     localStorage.setItem('theme', isDark ? 'dark' : 'light');
   }, [isDark]);
 
-  // Timer effect
   useEffect(() => {
     if (timerRunning) {
       timerRef.current = setInterval(() => setTimerSeconds(s => s + 1), 1000);
@@ -68,7 +66,6 @@ function App() {
     return () => clearInterval(timerRef.current);
   }, [timerRunning]);
 
-  // Fetch history when user logs in
   useEffect(() => {
     if (user) {
       const fetchHistory = async () => {
@@ -90,7 +87,6 @@ function App() {
     return `${m}:${sec}`;
   };
 
-  // Voice recognition
   const toggleVoice = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
@@ -117,36 +113,60 @@ function App() {
     setIsListening(true);
   };
 
-  // PDF Upload
+  // ── PDF Upload — fixed for pdfjs-dist v5 ──────────────────────────────────
   const handleFileUpload = async (event) => {
     const file = event.target.files[0];
     if (!file) return;
-    setIsLoading(true);
-    const reader = new FileReader();
-    reader.onload = async () => {
-      try {
-        const typedarray = new Uint8Array(reader.result);
-        const pdf = await pdfjsLib.getDocument({ data: typedarray }).promise;
-        let text = "";
-        for (let i = 1; i <= pdf.numPages; i++) {
-          const page = await pdf.getPage(i);
-          const content = await page.getTextContent();
-          text += content.items.map(item => item.str).join(" ");
-        }
-        setUserTechStack(text.substring(0, 3000));
-        setIsParsed(true);
-        alert("Resume parsed successfully! ✅");
-      } catch (err) {
-        console.error("PDF error:", err);
-        alert("Error parsing PDF. Make sure it's a valid PDF file.");
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    reader.readAsArrayBuffer(file);
-  };
 
-  // Central AI caller
+    // Basic validation
+    if (file.type !== 'application/pdf') {
+      alert("Please upload a valid PDF file.");
+      return;
+    }
+
+    setIsLoading(true);
+    setResumeFileName(file.name);
+
+    try {
+      // Convert File → ArrayBuffer → Uint8Array (works in all browsers)
+      const arrayBuffer = await file.arrayBuffer();
+      const uint8Array = new Uint8Array(arrayBuffer);
+
+      // pdfjs-dist v5: getDocument returns a PDFDocumentLoadingTask
+      const loadingTask = pdfjsLib.getDocument({ data: uint8Array });
+      const pdf = await loadingTask.promise;
+
+      let text = '';
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        // v5: items can be TextItem or TextMarkedContent — guard with .str check
+        const pageText = content.items
+          .filter(item => typeof item.str === 'string')
+          .map(item => item.str)
+          .join(' ');
+        text += pageText + '\n';
+      }
+
+      if (!text.trim()) {
+        alert("⚠️ PDF appears to be image-only or scanned. Text extraction returned empty. Try a text-based PDF.");
+        setIsLoading(false);
+        return;
+      }
+
+      setUserTechStack(text.substring(0, 3000));
+      setIsParsed(true);
+    } catch (err) {
+      console.error("PDF parsing error:", err);
+      alert(`❌ Error parsing PDF: ${err.message || 'Unknown error'}. Make sure it's a valid, non-password-protected PDF.`);
+    } finally {
+      setIsLoading(false);
+      // Reset file input so same file can be re-uploaded
+      event.target.value = '';
+    }
+  };
+  // ──────────────────────────────────────────────────────────────────────────
+
   const callAI = async (prompt) => {
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
@@ -167,7 +187,6 @@ function App() {
     return data.choices[0].message.content;
   };
 
-  // Save to Firestore + local history
   const saveToHistory = async (question, answer) => {
     try {
       await addDoc(collection(db, "interview_history"), {
@@ -182,7 +201,6 @@ function App() {
     }
   };
 
-  // ATS Audit
   const askAI = async () => {
     if (!isParsed) { alert("Please upload and parse your resume first!"); return; }
     setIsLoading(true);
@@ -220,7 +238,6 @@ Keep it concise and actionable.`;
     setIsLoading(false);
   };
 
-  // Mock Interview - Get Question
   const startMockInterview = async () => {
     if (!isParsed) { alert("Please upload your resume first!"); return; }
     setIsLoading(true);
@@ -247,7 +264,6 @@ Respond with ONLY the question. No intro, no explanation. Just the question itse
     setIsLoading(false);
   };
 
-  // Mock Interview - Submit Answer
   const submitMockAnswer = async () => {
     if (!mockAnswer.trim()) { alert("Please provide an answer first!"); return; }
     setIsLoading(true);
@@ -284,7 +300,6 @@ Be honest and constructive.`;
     setIsLoading(false);
   };
 
-  // JD Matcher
   const matchJD = async () => {
     if (!isParsed) { alert("Please upload your resume first!"); return; }
     if (!jobDescription.trim()) { alert("Please paste a job description!"); return; }
@@ -325,7 +340,6 @@ Provide analysis in this exact format:
     setIsLoading(false);
   };
 
-  // Auth handlers
   const handleAuth = async () => {
     setAuthError('');
     if (!email || !password) { setAuthError('Please enter email and password.'); return; }
@@ -345,6 +359,7 @@ Provide analysis in this exact format:
     setActiveFeature(null);
     setIsParsed(false);
     setUserTechStack('');
+    setResumeFileName('');
     setAiResponse('');
     setMockQuestion('');
     setMockAnswer('');
@@ -357,25 +372,42 @@ Provide analysis in this exact format:
     setTimerSeconds(0);
   };
 
-  // Loading screen while checking auth
   if (authLoading) return (
-    <div className="container" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh' }}>
-      <p style={{ color: 'var(--accent)', fontSize: '1.2rem' }}>Loading...</p>
+    <div className="splash-screen">
+      <div className="splash-logo">ProPrep <span className="splash-rocket">🚀</span></div>
+      <div className="splash-bar"><div className="splash-fill" /></div>
     </div>
   );
 
-  // ─── AUTH SCREEN ───
+  // ─── AUTH SCREEN ───────────────────────────────────────────────────────────
   if (!user) return (
-    <div className="container auth-container">
-      <div className="theme-toggle-fixed" onClick={() => setIsDark(d => !d)}>
-        {isDark ? '☀️' : '🌙'}
+    <div className="auth-page">
+      <div className="auth-bg">
+        <div className="auth-orb orb1" />
+        <div className="auth-orb orb2" />
+        <div className="auth-orb orb3" />
       </div>
-      <h1 className="logo">ProPrep 🚀</h1>
-      <p className="subtitle">Your AI-powered interview coach</p>
-      <div className="card">
-        <h2 style={{ margin: '0 0 24px', color: 'var(--accent)' }}>
-          {isRegistering ? 'Create Account' : 'Welcome Back'}
-        </h2>
+      <button className="theme-toggle-fixed" onClick={() => setIsDark(d => !d)}>
+        {isDark ? '☀️' : '🌙'}
+      </button>
+      <div className="auth-card">
+        <div className="auth-brand">
+          <h1 className="logo">ProPrep</h1>
+          <span className="logo-rocket">🚀</span>
+        </div>
+        <p className="subtitle">AI-powered interview coaching</p>
+
+        <div className="auth-tabs">
+          <button
+            className={`auth-tab ${!isRegistering ? 'active' : ''}`}
+            onClick={() => { setIsRegistering(false); setAuthError(''); }}
+          >Log In</button>
+          <button
+            className={`auth-tab ${isRegistering ? 'active' : ''}`}
+            onClick={() => { setIsRegistering(true); setAuthError(''); }}
+          >Sign Up</button>
+        </div>
+
         <input
           type="email" placeholder="Email address" value={email}
           onChange={e => setEmail(e.target.value)}
@@ -392,14 +424,11 @@ Provide analysis in this exact format:
         <button className="primary-btn" onClick={handleAuth}>
           {isRegistering ? '🚀 Create Account' : '🔑 Log In'}
         </button>
-        <p className="toggle-auth" onClick={() => { setIsRegistering(r => !r); setAuthError(''); }}>
-          {isRegistering ? 'Already have an account? Log In →' : "Don't have an account? Sign Up →"}
-        </p>
       </div>
     </div>
   );
 
-  // ─── MAIN APP ───
+  // ─── MAIN APP ──────────────────────────────────────────────────────────────
   return (
     <div className="container">
       {/* Top Bar */}
@@ -414,29 +443,58 @@ Provide analysis in this exact format:
         </div>
       </div>
 
-      {/* Resume Status Bar */}
-      <div className="status-bar">
-        <span className={isParsed ? 'status-ok' : 'status-warn'}>
-          {isParsed ? '✅ Resume loaded' : '❌ No resume uploaded'}
-        </span>
-        <label className="upload-inline">
-          {isLoading ? '⏳ Parsing...' : isParsed ? '📎 Re-upload PDF' : '📎 Upload Resume PDF'}
-          <input type="file" accept="application/pdf" onChange={handleFileUpload} hidden disabled={isLoading} />
+      {/* Resume Upload Bar */}
+      <div className={`status-bar ${isParsed ? 'status-bar--ok' : ''}`}>
+        <div className="status-left">
+          {isParsed ? (
+            <>
+              <span className="status-dot dot-ok" />
+              <span className="status-label-ok">
+                {resumeFileName ? resumeFileName : 'Resume loaded'}
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="status-dot dot-idle" />
+              <span className="status-label-idle">Upload your resume to get started</span>
+            </>
+          )}
+        </div>
+        <label className="upload-pill">
+          {isLoading ? (
+            <><span className="upload-spinner" /> Parsing...</>
+          ) : isParsed ? (
+            '↩ Re-upload'
+          ) : (
+            '📎 Upload PDF'
+          )}
+          <input
+            type="file"
+            accept="application/pdf"
+            onChange={handleFileUpload}
+            hidden
+            disabled={isLoading}
+          />
         </label>
       </div>
 
-      {/* Dashboard or Feature View */}
+      {/* Dashboard or Feature */}
       {!activeFeature ? (
         <div className="button-grid">
           {[
             { id: 'Knowledge Check', icon: '🧠', label: 'Knowledge Check', desc: 'ATS audit + question' },
-            { id: 'Mock Interview', icon: '🎤', label: 'Mock Interview', desc: 'AI-powered Q&A rounds' },
-            { id: 'JD Matcher', icon: '🎯', label: 'JD Matcher', desc: 'Match resume to job' },
-            { id: 'Timer', icon: '⏱️', label: 'Interview Timer', desc: 'Track session time' },
-            { id: 'History', icon: '📜', label: 'View History', desc: `${history.length} session(s)` },
-            { id: 'Resume Check', icon: '📄', label: 'Resume Check', desc: 'Full ATS analysis' },
-          ].map(({ id, icon, label, desc }) => (
-            <button key={id} className="dashboard-btn" onClick={() => setActiveFeature(id)}>
+            { id: 'Mock Interview',  icon: '🎤', label: 'Mock Interview',  desc: 'AI-powered Q&A rounds' },
+            { id: 'JD Matcher',      icon: '🎯', label: 'JD Matcher',      desc: 'Match resume to job' },
+            { id: 'Timer',           icon: '⏱️', label: 'Interview Timer', desc: 'Track session time' },
+            { id: 'History',         icon: '📜', label: 'View History',    desc: `${history.length} session(s)` },
+            { id: 'Resume Check',    icon: '📄', label: 'Resume Check',    desc: 'Full ATS analysis' },
+          ].map(({ id, icon, label, desc }, idx) => (
+            <button
+              key={id}
+              className="dashboard-btn"
+              onClick={() => setActiveFeature(id)}
+              style={{ animationDelay: `${idx * 0.07}s` }}
+            >
               <span className="icon">{icon}</span>
               <span className="btn-label">{label}</span>
               <span className="btn-desc">{desc}</span>
@@ -445,18 +503,18 @@ Provide analysis in this exact format:
         </div>
       ) : (
         <div className="card feature-card">
-          <button className="back-btn" onClick={() => setActiveFeature(null)}>← Back to Dashboard</button>
+          <button className="back-btn" onClick={() => setActiveFeature(null)}>← Dashboard</button>
 
-          {/* ── RESUME CHECK ── */}
+          {/* RESUME CHECK */}
           {activeFeature === 'Resume Check' && (
             <div className="feature-content">
               <h3>📄 ATS Resume Audit</h3>
-              <p className="feature-desc">Upload your resume to get an ATS compatibility score, improvement suggestions, and a tailored interview question.</p>
+              <p className="feature-desc">Upload your resume to get an ATS score, improvement tips, and a tailored interview question.</p>
               <label className="file-label">
                 📎 Choose PDF Resume
                 <input type="file" accept="application/pdf" onChange={handleFileUpload} hidden />
               </label>
-              <p className="status-text">{isParsed ? "✅ Resume loaded and ready" : "❌ No resume loaded"}</p>
+              <p className="status-text">{isParsed ? `✅ ${resumeFileName || 'Resume loaded'}` : "❌ No resume loaded"}</p>
               <button className="ai-btn" onClick={askAI} disabled={isLoading || !isParsed}>
                 {isLoading ? "⏳ Analyzing..." : "🔍 Run Full ATS Audit"}
               </button>
@@ -464,12 +522,12 @@ Provide analysis in this exact format:
             </div>
           )}
 
-          {/* ── KNOWLEDGE CHECK ── */}
+          {/* KNOWLEDGE CHECK */}
           {activeFeature === 'Knowledge Check' && (
             <div className="feature-content">
               <h3>🧠 Knowledge Check</h3>
               <p className="feature-desc">Get your ATS score and one challenging technical question based on your resume.</p>
-              <p className="status-text">{isParsed ? "✅ Resume loaded" : "❌ Upload your resume using the bar above first"}</p>
+              <p className="status-text">{isParsed ? `✅ ${resumeFileName || 'Resume loaded'}` : "❌ Upload your resume using the bar above first"}</p>
               <button className="ai-btn" onClick={askAI} disabled={isLoading || !isParsed}>
                 {isLoading ? "⏳ Thinking..." : "🤖 Analyze & Generate Question"}
               </button>
@@ -477,13 +535,13 @@ Provide analysis in this exact format:
             </div>
           )}
 
-          {/* ── MOCK INTERVIEW ── */}
+          {/* MOCK INTERVIEW */}
           {activeFeature === 'Mock Interview' && (
             <div className="feature-content">
               <h3>🎤 Mock Interview</h3>
               <div className="mock-meta">
                 <span className="round-badge">Round {mockRound}</span>
-                <span className="status-text">{isParsed ? "✅ Resume loaded" : "❌ Upload resume first"}</span>
+                <span className="status-text">{isParsed ? `✅ ${resumeFileName || 'Resume loaded'}` : "❌ Upload resume first"}</span>
               </div>
               <button className="ai-btn" onClick={startMockInterview} disabled={isLoading || !isParsed}>
                 {isLoading && !mockQuestion ? "⏳ Loading..." : mockRound === 0 ? "▶️ Start Interview" : "⏭️ Next Question"}
@@ -495,7 +553,6 @@ Provide analysis in this exact format:
                     <span className="question-label">Question {mockRound}</span>
                     <p>{mockQuestion}</p>
                   </div>
-
                   <div className="voice-row">
                     <textarea
                       className="answer-input"
@@ -512,8 +569,7 @@ Provide analysis in this exact format:
                       {isListening ? '🔴' : '🎙️'}
                     </button>
                   </div>
-                  {isListening && <p className="listening-text">🎙️ Listening... speak your answer</p>}
-
+                  {isListening && <p className="listening-text">🎙️ Listening… speak your answer</p>}
                   <button
                     className="submit-btn"
                     onClick={submitMockAnswer}
@@ -523,17 +579,16 @@ Provide analysis in this exact format:
                   </button>
                 </>
               )}
-
               {mockFeedback && <div className="ai-output feedback-output">{mockFeedback}</div>}
             </div>
           )}
 
-          {/* ── JD MATCHER ── */}
+          {/* JD MATCHER */}
           {activeFeature === 'JD Matcher' && (
             <div className="feature-content">
               <h3>🎯 Job Description Matcher</h3>
               <p className="feature-desc">Paste a job description to see how well your resume matches and what keywords you're missing.</p>
-              <p className="status-text">{isParsed ? "✅ Resume loaded" : "❌ Upload resume first"}</p>
+              <p className="status-text">{isParsed ? `✅ ${resumeFileName || 'Resume loaded'}` : "❌ Upload resume first"}</p>
               <textarea
                 className="answer-input jd-input"
                 placeholder="Paste the full job description here..."
@@ -548,14 +603,15 @@ Provide analysis in this exact format:
             </div>
           )}
 
-          {/* ── TIMER ── */}
+          {/* TIMER */}
           {activeFeature === 'Timer' && (
             <div className="feature-content timer-content">
               <h3>⏱️ Interview Timer</h3>
-              <p className="feature-desc">Track your answer time. Most interviewers expect 1-3 minutes per answer.</p>
+              <p className="feature-desc">Track your answer time. Most interviewers expect 1–3 minutes per answer.</p>
               <div className="timer-display">{formatTime(timerSeconds)}</div>
               <div className="timer-bars">
-                <div className="timer-bar" style={{ width: `${Math.min((timerSeconds / 180) * 100, 100)}%`,
+                <div className="timer-bar" style={{
+                  width: `${Math.min((timerSeconds / 180) * 100, 100)}%`,
                   background: timerSeconds < 60 ? 'var(--accent2)' : timerSeconds < 180 ? 'var(--accent)' : '#ff6b6b'
                 }} />
               </div>
@@ -576,14 +632,14 @@ Provide analysis in this exact format:
             </div>
           )}
 
-          {/* ── HISTORY ── */}
+          {/* HISTORY */}
           {activeFeature === 'History' && (
             <div className="feature-content">
               <h3>📜 Session History</h3>
               {history.length === 0 ? (
                 <div className="empty-state">
                   <p>📭 No sessions yet.</p>
-                  <p>Complete a Knowledge Check or Mock Interview to see your history here.</p>
+                  <p>Complete a Knowledge Check or Mock Interview to see history here.</p>
                 </div>
               ) : (
                 [...history].reverse().map((h, i) => (
