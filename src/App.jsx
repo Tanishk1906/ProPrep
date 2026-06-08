@@ -4,10 +4,7 @@ import { auth, db } from './firebase';
 import { collection, addDoc, query, where, getDocs } from 'firebase/firestore';
 import './App.css';
 
-// ── pdfjs-dist v5 correct import ──────────────────────────────────────────────
-import * as pdfjsLib from 'pdfjs-dist';
-// For pdfjs-dist v5, set the workerSrc to the CDN copy so Vite doesn't bundle it
-pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';────────────────────────────────────────────────────────────────────────────
+// NO top-level pdfjs import — dynamic import inside handleFileUpload fixes Vercel build
 
 function App() {
   const [user, setUser] = useState(null);
@@ -41,7 +38,6 @@ function App() {
   const [isListening, setIsListening] = useState(false);
   const recognitionRef = useRef(null);
 
-  // Auth state listener
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
       setUser(firebaseUser);
@@ -111,12 +107,11 @@ function App() {
     setIsListening(true);
   };
 
-  // ── PDF Upload — fixed for pdfjs-dist v5 ──────────────────────────────────
+  // ── PDF Upload — dynamic import fixes Vercel/esbuild build error ────────────
   const handleFileUpload = async (event) => {
     const file = event.target.files[0];
     if (!file) return;
 
-    // Basic validation
     if (file.type !== 'application/pdf') {
       alert("Please upload a valid PDF file.");
       return;
@@ -126,11 +121,14 @@ function App() {
     setResumeFileName(file.name);
 
     try {
-      // Convert File → ArrayBuffer → Uint8Array (works in all browsers)
+      // Dynamic import — esbuild won't try to statically bundle pdfjs at build time
+      const pdfjsLib = await import('pdfjs-dist');
+      // Use the local worker file from /public folder
+      pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
+
       const arrayBuffer = await file.arrayBuffer();
       const uint8Array = new Uint8Array(arrayBuffer);
 
-      // pdfjs-dist v5: getDocument returns a PDFDocumentLoadingTask
       const loadingTask = pdfjsLib.getDocument({ data: uint8Array });
       const pdf = await loadingTask.promise;
 
@@ -138,7 +136,6 @@ function App() {
       for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i);
         const content = await page.getTextContent();
-        // v5: items can be TextItem or TextMarkedContent — guard with .str check
         const pageText = content.items
           .filter(item => typeof item.str === 'string')
           .map(item => item.str)
@@ -147,7 +144,7 @@ function App() {
       }
 
       if (!text.trim()) {
-        alert("⚠️ PDF appears to be image-only or scanned. Text extraction returned empty. Try a text-based PDF.");
+        alert("⚠️ PDF appears to be image-only or scanned. Try a text-based PDF.");
         setIsLoading(false);
         return;
       }
@@ -159,11 +156,10 @@ function App() {
       alert(`❌ Error parsing PDF: ${err.message || 'Unknown error'}. Make sure it's a valid, non-password-protected PDF.`);
     } finally {
       setIsLoading(false);
-      // Reset file input so same file can be re-uploaded
       event.target.value = '';
     }
   };
-  // ──────────────────────────────────────────────────────────────────────────
+  // ───────────────────────────────────────────────────────────────────────────
 
   const callAI = async (prompt) => {
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
