@@ -7,9 +7,7 @@ import './App.css';
 // ── pdfjs-dist v5 correct import ──────────────────────────────────────────────
 import * as pdfjsLib from 'pdfjs-dist';
 // For pdfjs-dist v5, set the workerSrc to the CDN copy so Vite doesn't bundle it
-pdfjsLib.GlobalWorkerOptions.workerSrc =
-  `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
-// ─────────────────────────────────────────────────────────────────────────────
+pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';────────────────────────────────────────────────────────────────────────────
 
 function App() {
   const [user, setUser] = useState(null);
