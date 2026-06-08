@@ -108,7 +108,7 @@ function App() {
   };
 
   // ── PDF Upload — dynamic import fixes Vercel/esbuild build error ────────────
-  const handleFileUpload = async (event) => {
+const handleFileUpload = async (event) => {
   const file = event.target.files[0];
   if (!file) return;
 
@@ -121,45 +121,46 @@ function App() {
   setResumeFileName(file.name);
 
   try {
-    // Dynamic import
     const pdfjsLib = await import('pdfjs-dist');
     
-    // Set worker source - use full URL for Vercel compatibility
-    pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
+    // Use CDN with correct version that matches pdfjs-dist
+    const pdfjsVersion = pdfjsLib.version;
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 
+      `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsVersion}/pdf.worker.min.mjs`;
 
-      const arrayBuffer = await file.arrayBuffer();
-      const uint8Array = new Uint8Array(arrayBuffer);
+    const arrayBuffer = await file.arrayBuffer();
+    const uint8Array = new Uint8Array(arrayBuffer);
 
-      const loadingTask = pdfjsLib.getDocument({ data: uint8Array });
-      const pdf = await loadingTask.promise;
+    const loadingTask = pdfjsLib.getDocument({ data: uint8Array });
+    const pdf = await loadingTask.promise;
 
-      let text = '';
-      for (let i = 1; i <= pdf.numPages; i++) {
-        const page = await pdf.getPage(i);
-        const content = await page.getTextContent();
-        const pageText = content.items
-          .filter(item => typeof item.str === 'string')
-          .map(item => item.str)
-          .join(' ');
-        text += pageText + '\n';
-      }
-
-      if (!text.trim()) {
-        alert("⚠️ PDF appears to be image-only or scanned. Try a text-based PDF.");
-        setIsLoading(false);
-        return;
-      }
-
-      setUserTechStack(text.substring(0, 3000));
-      setIsParsed(true);
-    } catch (err) {
-      console.error("PDF parsing error:", err);
-      alert(`❌ Error parsing PDF: ${err.message || 'Unknown error'}. Make sure it's a valid, non-password-protected PDF.`);
-    } finally {
-      setIsLoading(false);
-      event.target.value = '';
+    let text = '';
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      const pageText = content.items
+        .filter(item => typeof item.str === 'string')
+        .map(item => item.str)
+        .join(' ');
+      text += pageText + '\n';
     }
-  };
+
+    if (!text.trim()) {
+      alert("⚠️ PDF appears to be image-only or scanned. Try a text-based PDF.");
+      setIsLoading(false);
+      return;
+    }
+
+    setUserTechStack(text.substring(0, 3000));
+    setIsParsed(true);
+  } catch (err) {
+    console.error("PDF parsing error:", err);
+    alert(`❌ Error parsing PDF: ${err.message || 'Unknown error'}. Make sure it's a valid, non-password-protected PDF.`);
+  } finally {
+    setIsLoading(false);
+    event.target.value = '';
+  }
+};
   // ───────────────────────────────────────────────────────────────────────────
 
   const callAI = async (prompt) => {
